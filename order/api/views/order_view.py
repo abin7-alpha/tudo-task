@@ -19,9 +19,17 @@ def order_view(request):
     """Create the order by giving these data 
     {
         "email": "demo@gmail.com",
-        "item_id": 1,
+        "items": [
+            {
+                "item_id": 1,
+                "quantity": 10
+            },
+            {
+                "item_id": 3,
+                "quantity": 10
+            }
+        ],
         "transaction_id": 2345,
-        "quantity": 20,
         "address": "hilal nagr house",
         "city": "thhrikur",
         "state": "kerala",
@@ -34,8 +42,25 @@ def order_view(request):
     order_serializer = OrderSerializer(data=data, context=data)
 
     user = Account.objects.get(email=data["email"])
-    customer = Customer.objects.get(user=user)
-    commodity = Commodity.objects.get(id=data["item_id"])
+
+    for item in data["items"]:
+        commodity = Commodity.objects.get(id=item["item_id"])
+        response_data = {}
+
+        # if item["quantity"] > commodity.max_qty_allowed_per_order:
+        #     response_data["error"] = f"{commodity.name} quantity should be under the limit ${commodity.max_qty_allowed_per_order}"
+        #     return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+        
+        if item["quantity"] > commodity.max_available_qty:
+            response_data["error"] = f"{commodity.name}'s maximum available quantity is {commodity.max_available_qty}"
+            return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+        
+        if commodity.available_quantity < item["quantity"]:
+            response_data["error"] = f"{commodity.name} is out of stock, We will notify you when it arrives"
+            return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+        
+        available_quantity = commodity.available_quantity - float(item["quantity"])
+        Commodity.objects.filter(id=item["item_id"]).update(available_quantity=available_quantity, max_available_qty=available_quantity)
 
     if order_serializer.is_valid():
         
@@ -43,13 +68,15 @@ def order_view(request):
 
         data.update({"order_id": order.id})
 
-        order_item_serializer = OrderItemSerializer(data=data, context=data)
+        for item_data in data["items"]:
+            item_data.update({"order_id": order.id})
+            order_item_serializer = OrderItemSerializer(data=item_data, context=item_data)
 
-        if order_item_serializer.is_valid():
-            order_item_serializer.save()
-        else:
-            response_data = order_item_serializer.errors
-            return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+            if order_item_serializer.is_valid():
+                order_item_serializer.save()
+            else:
+                response_data = order_item_serializer.errors
+                return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
         shipping_serializer = ShippingAddressSerializer(data=data, context=data)
         
@@ -58,10 +85,6 @@ def order_view(request):
         else:
             response_data = shipping_serializer.errors
             return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
-
-        # decrease the quantity ordered from the commodity quantity
-        available_quantity = commodity.available_quantity - float(data["quantity"])
-        Commodity.objects.filter(id=data["item_id"]).update(available_quantity=available_quantity)
 
         response_data = {}
 
